@@ -1,0 +1,40 @@
+name: quickpolls
+services:
+  quickpolls-web:
+    container_name: quickpolls-web
+    build: ./web
+    ports:
+      - "8080:80"
+    environment:
+      API_URL: http://quickpolls-api:3000
+    depends_on:
+      - quickpolls-api
+    volumes:
+      - ./default.conf:/etc/nginx/conf.d/default.conf
+
+  quickpolls-api:
+    container_name: quickpolls-api
+    build: ./api
+    ports:
+      -  "3000:3000"
+    environment:
+      DATABASE_URL: postgres://${DB_USER}:${DB_PASSWORD}@db:5432/quickpolls
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: quickpolls
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quickpolls"]
+      interval: 3s
+      retries: 10
+
+volumes:
+  pgdata:
