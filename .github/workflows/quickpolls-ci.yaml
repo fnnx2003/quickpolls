@@ -22,3 +22,23 @@ jobs:
           context: ./${{ matrix.service }}
           push: ${{ github.event_name == 'push' }}
           tags: fnnnx/quickpolls-${{ matrix.service }}:${{github.sha }}
+  update-manifests:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update image tags
+        run: |
+          yq -i '.image.tag = "${{ github.sha }}"' api-chart/values.yaml
+          yq -i '.image.tag = "${{ github.sha }}"' web-chart/values.yaml
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add api-chart web-chart
+          git commit -m "Deploy ${{ github.sha }} [skip ci]" || exit 0
+          git pull --rebase
+          git push

@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: quickpolls-web
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/fnnx2003/quickpolls.git
+    targetRevision: main
+    path: web-chart
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: quickpolls
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
