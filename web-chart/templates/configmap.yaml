@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}
+
+data:
+  default.conf: |
+    server {
+      listen 80;
+      root /usr/share/nginx/html;
+      index index.html;
+
+      location /api/ {
+        proxy_pass http://{{ .Values.apiService }};
+      }
+
+      location / {
+        try_files $uri /index.html;
+      }
+    }
