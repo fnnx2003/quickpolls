@@ -1,13 +1,10 @@
 replicaCount: 2
 image:
   repository: fnnnx/quickpolls-web
-  tag: "1.0"
+  tag: "0c5ceda30ff82491804d062171d0753922982916"
   pullPolicy: IfNotPresent
-
 containerPort: 80
-
 service:
   type: ClusterIP
   port: 80
-
 apiService: quickpolls-api:80
