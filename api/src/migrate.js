@@ -19,6 +19,19 @@ CREATE TABLE IF NOT EXISTS options (
 );
 
 CREATE INDEX IF NOT EXISTS options_poll_id_idx ON options(poll_id);
+
+-- Added later: every statement is idempotent so existing databases upgrade in place.
+ALTER TABLE polls ADD COLUMN IF NOT EXISTS allow_multiple BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE polls ADD COLUMN IF NOT EXISTS closes_at TIMESTAMPTZ;
+
+-- One row per (voter, option): stops the same browser from voting twice.
+CREATE TABLE IF NOT EXISTS poll_votes (
+  poll_id    INTEGER NOT NULL REFERENCES polls(id) ON DELETE CASCADE,
+  option_id  INTEGER NOT NULL REFERENCES options(id) ON DELETE CASCADE,
+  voter_id   TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (poll_id, voter_id, option_id)
+);
 `;
 
 // Arbitrary constant: several API replicas may start at once, the lock makes them migrate one at a time.
