@@ -22,7 +22,38 @@ export function validatePollInput(body) {
     errors.push("options must be unique");
   }
 
-  return errors.length ? { ok: false, errors } : { ok: true, value: { question, options } };
+  if (body?.allowMultiple !== undefined && typeof body.allowMultiple !== "boolean") {
+    errors.push("allowMultiple must be a boolean");
+  }
+
+  // Optional auto-close, from 1 minute up to 30 days.
+  let closesInMinutes = null;
+  if (body?.closesInMinutes !== undefined && body.closesInMinutes !== null) {
+    closesInMinutes = body.closesInMinutes;
+    if (!Number.isInteger(closesInMinutes) || closesInMinutes < 1 || closesInMinutes > MAX_CLOSE_MINUTES) {
+      errors.push(`closesInMinutes must be an integer between 1 and ${MAX_CLOSE_MINUTES}`);
+    }
+  }
+
+  return errors.length
+    ? { ok: false, errors }
+    : { ok: true, value: { question, options, allowMultiple: body.allowMultiple === true, closesInMinutes } };
+}
+
+const MAX_CLOSE_MINUTES = 30 * 24 * 60;
+
+// Accepts { optionId: 3 } or { optionIds: [3, 4] } and returns unique ids, or null if invalid.
+export function parseOptionIds(body) {
+  const raw = Array.isArray(body?.optionIds) ? body.optionIds : [body?.optionId];
+  if (raw.length === 0 || raw.length > 10) return null;
+  const ids = raw.map(parseId);
+  if (ids.some((id) => id === null)) return null;
+  return [...new Set(ids)];
+}
+
+// The browser sends a random id so the API can enforce one vote per person (per browser).
+export function parseVoterId(value) {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(value) ? value : null;
 }
 
 export function parseId(value) {

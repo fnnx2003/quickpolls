@@ -80,6 +80,24 @@ test("GET /api/polls/:id returns 404 for unknown poll", async () => {
   assert.equal((await fetch(`${base}/api/polls/999`)).status, 404);
 });
 
+test("GET /api/stats returns totals", async () => {
+  const body = await (await fetch(`${base}/api/stats`)).json();
+  assert.deepEqual(body, { polls: 0, openPolls: 0, votes: 0 });
+});
+
+test("POST /api/polls/:id/vote rejects a missing optionId", async () => {
+  const res = await fetch(`${base}/api/polls/1/vote`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  assert.equal(res.status, 400);
+});
+
+test("POST /api/polls/:id/close returns 404 for unknown poll", async () => {
+  assert.equal((await fetch(`${base}/api/polls/999/close`, { method: "POST" })).status, 404);
+});
+
 test("chaos endpoints are disabled by default", async () => {
   assert.equal((await fetch(`${base}/api/chaos/crash`, { method: "POST" })).status, 404);
 });

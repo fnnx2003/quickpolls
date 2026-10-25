@@ -85,11 +85,17 @@ window.__APP_CONFIG__ = { apiBaseUrl: "", environment: "local" };
 | GET | `/readyz` | **Readiness**: 200 only if PostgreSQL is reachable, otherwise 503 |
 | GET | `/metrics` | Prometheus metrics (HTTP latency histogram, votes, polls, Node.js runtime) |
 | GET | `/api/info` | Version, **hostname** (= pod name in k8s), uptime |
-| GET | `/api/polls` | List polls |
-| POST | `/api/polls` | `{ "question": "...", "options": ["a","b"] }` |
-| GET | `/api/polls/:id` | Poll with results |
-| POST | `/api/polls/:id/vote` | `{ "optionId": 3 }` |
+| GET | `/api/stats` | Totals: `{ polls, openPolls, votes }` |
+| GET | `/api/polls` | List polls. Query: `search`, `sort` (`newest`/`oldest`/`popular`), `status` (`all`/`open`/`closed`) |
+| POST | `/api/polls` | `{ "question": "...", "options": ["a","b"], "allowMultiple": false, "closesInMinutes": 60 }` (last two optional) |
+| GET | `/api/polls/:id` | Poll with results (+ `myVotes` when `X-Voter-Id` is sent) |
+| POST | `/api/polls/:id/vote` | `{ "optionId": 3 }` or `{ "optionIds": [3, 4] }` for multiple-choice polls |
+| POST | `/api/polls/:id/close` | Close a poll now (no more votes) |
 | DELETE | `/api/polls/:id` | Delete a poll |
+
+**One vote per person:** the web app sends a random per-browser `X-Voter-Id` header. With it, the API allows one vote per single-choice poll (or one per option on multiple-choice polls) and returns `409` for repeats. Requests without the header (e.g. `curl`) stay anonymous and unlimited, which is handy for load tests. Closed polls return `409`.
+
+The schema upgrades itself on startup (or `npm run migrate`): new columns/tables use `IF NOT EXISTS`, so existing databases keep their data.
 
 ### Chaos endpoints (`ENABLE_CHAOS=true`)
 
