@@ -1,16 +1,12 @@
 replicaCount: 2
-
 image:
   repository: fnnnx/quickpolls-api
-  tag: "1.0"
+  tag: "ecd236d694bfdf7ea11c23791ea12b6fc28fd83a"
   pullPolicy: IfNotPresent
-
 containerPort: 3000
-
 service:
   type: ClusterIP
   port: 80
-
 env:
   PGHOST: quickpolls-db
   PGPORT: "5432"
@@ -21,7 +17,6 @@ env:
 dbSecret:
   name: db-secret
   key: password
-
 resources:
   requests:
     cpu: 100m
@@ -32,6 +27,3 @@ resources:
 probe:
   readiness: /readyz
   liveness: /healthz
-
-
-
