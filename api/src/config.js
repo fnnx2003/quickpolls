@@ -19,6 +19,8 @@ export function loadConfig(env = process.env) {
     databaseUrl: databaseUrl(env),
     appVersion: env.APP_VERSION ?? "dev",
     corsOrigin: env.CORS_ORIGIN ?? "",
+    // Optional. Set it (e.g. redis://quickpolls-redis:6379) to share live updates across replicas.
+    redisUrl: env.REDIS_URL ?? "",
     runMigrations: bool(env.RUN_MIGRATIONS, true),
     enableChaos: bool(env.ENABLE_CHAOS, false),
     shutdownTimeoutMs: Number(env.SHUTDOWN_TIMEOUT_MS ?? 10000),

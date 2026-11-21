@@ -59,6 +59,7 @@ npm run dev        # http://localhost:5173, proxies /api to localhost:3000
 | `APP_VERSION` | `dev` | Shown in the UI footer. Set it to the image tag / git SHA |
 | `RUN_MIGRATIONS` | `true` | Set `false` if you run `npm run migrate` as a separate Job/initContainer |
 | `CORS_ORIGIN` | (empty) | Only needed if the frontend calls the API from a different origin |
+| `REDIS_URL` | (empty) | Optional, e.g. `redis://quickpolls-redis:6379`. Shares live updates across API replicas (see below) |
 | `ENABLE_CHAOS` | `false` | Enables the chaos endpoints below |
 | `SHUTDOWN_TIMEOUT_MS` | `10000` | Max time for graceful shutdown after SIGTERM |
 
@@ -84,7 +85,8 @@ window.__APP_CONFIG__ = { apiBaseUrl: "", environment: "local" };
 | GET | `/healthz` | **Liveness**: always 200 unless the process is broken |
 | GET | `/readyz` | **Readiness**: 200 only if PostgreSQL is reachable, otherwise 503 |
 | GET | `/metrics` | Prometheus metrics (HTTP latency histogram, votes, polls, Node.js runtime) |
-| GET | `/api/info` | Version, **hostname** (= pod name in k8s), uptime |
+| GET | `/api/info` | Version, **hostname** (= pod name in k8s), uptime, `liveUpdates` (`redis`/`local`) |
+| GET | `/api/events` | Live updates as **Server-Sent Events** (a long-lived `text/event-stream` response) |
 | GET | `/api/stats` | Totals: `{ polls, openPolls, votes }` |
 | GET | `/api/polls` | List polls. Query: `search`, `sort` (`newest`/`oldest`/`popular`), `status` (`all`/`open`/`closed`) |
 | POST | `/api/polls` | `{ "question": "...", "options": ["a","b"], "allowMultiple": false, "closesInMinutes": 60 }` (last two optional) |
@@ -94,6 +96,16 @@ window.__APP_CONFIG__ = { apiBaseUrl: "", environment: "local" };
 | DELETE | `/api/polls/:id` | Delete a poll |
 
 **One vote per person:** the web app sends a random per-browser `X-Voter-Id` header. With it, the API allows one vote per single-choice poll (or one per option on multiple-choice polls) and returns `409` for repeats. Requests without the header (e.g. `curl`) stay anonymous and unlimited, which is handy for load tests. Closed polls return `409`.
+
+### Live updates
+
+The web app keeps `GET /api/events` open. Whenever a poll is created, voted on, closed or deleted, the API pushes a tiny message (`{ "type": "poll.voted", "pollId": 3, "from": "<pod name>" }`) and browsers refetch just that poll. A comment line is sent every 15s so proxies don't drop idle connections. If the stream is unavailable, the UI shows "Polling" and falls back to refreshing every 3s.
+
+- **Without `REDIS_URL`**, events only reach browsers connected to the replica that handled the change. With 2+ replicas, some windows update instantly and others only on the 30s safety-net refresh.
+- **With `REDIS_URL`**, every replica publishes to and listens on the Redis channel `quickpolls:events`, so every browser hears every change. The footer shows which pod sent the last event.
+- Redis is optional: if it's down, the API keeps working (`/readyz` reports it but stays ready) and events fall back to the local replica.
+- On `SIGTERM` the API closes open streams so shutdown isn't blocked; browsers reconnect to another replica.
+- Metric: `quickpolls_sse_clients` = open live connections on this replica.
 
 The schema upgrades itself on startup (or `npm run migrate`): new columns/tables use `IF NOT EXISTS`, so existing databases keep their data.
 

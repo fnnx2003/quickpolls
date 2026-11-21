@@ -4,6 +4,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/app.js";
 import { createMetrics } from "../src/metrics.js";
+import { createEventBus } from "../src/events.js";
 
 let dbUp = true;
 const fakePool = {
@@ -18,12 +19,14 @@ const fakePool = {
 
 let server;
 let base;
+const events = createEventBus();
 
 before(async () => {
   const app = createApp({
     pool: fakePool,
     config: { appVersion: "test", corsOrigin: "", enableChaos: false },
     metrics: createMetrics(),
+    events,
   });
   server = app.listen(0);
   await new Promise((r) => server.once("listening", r));
@@ -105,4 +108,28 @@ test("chaos endpoints are disabled by default", async () => {
 test("GET /metrics exposes Prometheus metrics", async () => {
   const text = await (await fetch(`${base}/metrics`)).text();
   assert.match(text, /http_request_duration_seconds/);
+});
+
+test("GET /api/events streams published events", async () => {
+  const controller = new AbortController();
+  const res = await fetch(`${base}/api/events`, { signal: controller.signal });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-type"), /text\/event-stream/);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  const readUntil = async (pattern) => {
+    while (!pattern.test(text)) text += decoder.decode((await reader.read()).value);
+  };
+
+  await readUntil(/"type":"hello"/);
+  assert.equal(events.listenerCount(), 1);
+  events.publish("poll.voted", 7);
+  await readUntil(/"type":"poll.voted"/);
+  assert.match(text, /"pollId":7/);
+
+  controller.abort();
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(events.listenerCount(), 0, "closed streams must unsubscribe");
 });

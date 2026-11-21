@@ -48,6 +48,10 @@ body { margin: 0; background: var(--bg); }
 header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
 header h1 { margin: 0; font-size: 1.6rem; }
 header .stats { margin-left: auto; font-size: 0.85rem; }
+.live-status { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--muted); }
+.live-status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.live-status.live .dot { background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+.live-status.connecting .dot { background: #e0a100; }
 header .theme { padding: 6px 10px; }
 @media (max-width: 760px) { header { flex-wrap: wrap; } header .stats { margin-left: 0; order: 3; width: 100%; } header .theme { margin-left: auto; } }
 .badge {

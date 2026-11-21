@@ -2,11 +2,14 @@ import express from "express";
 import os from "node:os";
 import { validatePollInput, parseId, parseOptionIds, parseVoterId } from "./validation.js";
 import { log } from "./logger.js";
+import { createEventBus } from "./events.js";
 
 const startedAt = Date.now();
 
+const KEEPALIVE_MS = 15000;
+
 // Dependencies are injected so tests can pass fakes instead of a real database.
-export function createApp({ pool, config, metrics }) {
+export function createApp({ pool, config, metrics, events = createEventBus() }) {
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "16kb" }));
@@ -16,7 +19,7 @@ export function createApp({ pool, config, metrics }) {
   app.use((req, res, next) => {
     const start = Date.now();
     res.on("finish", () => {
-      if (["/healthz", "/readyz", "/metrics"].includes(req.path)) return;
+      if (["/healthz", "/readyz", "/metrics", "/api/events"].includes(req.path)) return;
       log.info("request", { method: req.method, path: req.path, status: res.statusCode, ms: Date.now() - start });
     });
     next();
@@ -42,12 +45,15 @@ export function createApp({ pool, config, metrics }) {
   });
 
   // Readiness: can this instance serve traffic right now?
+  // Redis is reported but never makes us unready: without it live updates just stay on this replica.
   app.get("/readyz", async (req, res) => {
+    const checks = {};
+    if (events.mode === "redis") checks.redis = events.redisReady() ? "ok" : "down (live updates limited to this replica)";
     try {
       await pool.query("SELECT 1");
-      res.json({ status: "ready", checks: { postgres: "ok" } });
+      res.json({ status: "ready", checks: { postgres: "ok", ...checks } });
     } catch (err) {
-      res.status(503).json({ status: "not ready", checks: { postgres: err.message } });
+      res.status(503).json({ status: "not ready", checks: { postgres: err.message, ...checks } });
     }
   });
 
@@ -61,8 +67,45 @@ export function createApp({ pool, config, metrics }) {
       hostname: os.hostname(),
       uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
       node: process.version,
+      liveUpdates: events.mode === "redis" && events.redisReady() ? "redis" : "local",
     });
   });
+
+  // ---- Live updates (Server-Sent Events) ---------------------------------------
+  // Browsers keep this request open; we push a tiny "poll X changed" message and they refetch.
+  // Long-lived connections are what make proxies (nginx, Ingress) and rolling updates interesting.
+
+  const streams = new Set();
+
+  app.get("/api/events", (req, res) => {
+    res.set({
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no", // tells nginx not to buffer this response
+    });
+    res.flushHeaders();
+    res.write(`retry: 3000\ndata: ${JSON.stringify({ type: "hello", from: os.hostname() })}\n\n`);
+
+    const unsubscribe = events.subscribe((event) => res.write(`data: ${JSON.stringify(event)}\n\n`));
+    // Comment lines keep idle proxies (nginx default: 60s) from closing the connection.
+    const keepalive = setInterval(() => res.write(": keepalive\n\n"), KEEPALIVE_MS);
+    streams.add(res);
+    metrics.sseClients.inc();
+
+    res.on("close", () => {
+      clearInterval(keepalive);
+      unsubscribe();
+      streams.delete(res);
+      metrics.sseClients.dec();
+    });
+  });
+
+  // Called on SIGTERM: open streams would otherwise keep server.close() waiting until the timeout.
+  // Browsers reconnect automatically, to another replica.
+  app.closeEventStreams = () => {
+    for (const res of streams) res.end();
+  };
 
   // ---- Polls ----------------------------------------------------------------
 
@@ -143,6 +186,7 @@ export function createApp({ pool, config, metrics }) {
       }
       await client.query("COMMIT");
       metrics.pollsCreated.inc();
+      events.publish("poll.created", pollId);
       res.status(201).json(await loadPoll(pollId));
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});
@@ -211,6 +255,7 @@ export function createApp({ pool, config, metrics }) {
       await client.query("COMMIT");
       committed = true;
       metrics.votesCast.inc(newIds.length);
+      events.publish("poll.voted", pollId);
     } finally {
       if (!committed) await client.query("ROLLBACK").catch(() => {});
       client.release();
@@ -227,6 +272,7 @@ export function createApp({ pool, config, metrics }) {
       [id],
     );
     if (rowCount === 0) return res.status(404).json({ errors: ["poll not found"] });
+    events.publish("poll.closed", id);
     res.json(await loadPoll(id, parseVoterId(req.get("X-Voter-Id"))));
   });
 
@@ -235,6 +281,7 @@ export function createApp({ pool, config, metrics }) {
     if (!id) return res.status(400).json({ errors: ["invalid poll id"] });
     const { rowCount } = await pool.query("DELETE FROM polls WHERE id = $1", [id]);
     if (rowCount === 0) return res.status(404).json({ errors: ["poll not found"] });
+    events.publish("poll.deleted", id);
     res.sendStatus(204);
   });
 
