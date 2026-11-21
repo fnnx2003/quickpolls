@@ -12,6 +12,8 @@ env:
   PGPORT: "5432"
   PGUSER: quickpolls
   PGDATABASE: quickpolls
+  REDIS_URL: redis://quickpolls-redis:6379
+
 dbSecret:
   name: db-secret
   key: password

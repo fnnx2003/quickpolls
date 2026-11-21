@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: quickpolls-redis        # ← the app name in Argo CD (also becomes the Helm release name → Service name)
+  namespace: argocd             # the Application itself lives in Argo CD's namespace
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/fnnx2003/quickpolls.git
+    targetRevision: main        # watches the main branch
+    path: redis-chart           # ← which folder in the repo holds the chart
+  destination:
+    server: https://kubernetes.default.svc   # this cluster itself
+    namespace: quickpolls       # where Redis gets deployed
+  syncPolicy:
+    automated:                  # deploy automatically on every change in Git
+      prune: true               # deleted from Git → deleted from the cluster
+      selfHeal: true            # someone changed it by hand with kubectl → Argo CD reverts it
+    syncOptions:
+      - CreateNamespace=true
