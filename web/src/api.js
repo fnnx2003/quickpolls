@@ -42,3 +42,4 @@ export const api = {
 };
 
 export const environment = config.environment ?? "unknown";
+export const eventsUrl = `${BASE}/api/events`;

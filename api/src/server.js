@@ -2,6 +2,7 @@ import pg from "pg";
 import { loadConfig } from "./config.js";
 import { createApp } from "./app.js";
 import { createMetrics } from "./metrics.js";
+import { createEventBus } from "./events.js";
 import { migrateWithRetry } from "./migrate.js";
 import { log } from "./logger.js";
 
@@ -18,9 +19,10 @@ if (config.runMigrations) {
   }
 }
 
-const app = createApp({ pool, config, metrics: createMetrics() });
+const events = createEventBus({ redisUrl: config.redisUrl });
+const app = createApp({ pool, config, metrics: createMetrics(), events });
 const server = app.listen(config.port, () => {
-  log.info("api listening", { port: config.port, version: config.appVersion });
+  log.info("api listening", { port: config.port, version: config.appVersion, liveUpdates: events.mode });
 });
 
 // Graceful shutdown: Kubernetes sends SIGTERM, we stop accepting connections,
@@ -35,10 +37,12 @@ function shutdown(signal) {
     process.exit(1);
   }, config.shutdownTimeoutMs).unref();
   server.close(async () => {
+    await events.close();
     await pool.end().catch(() => {});
     log.info("shutdown complete");
     process.exit(0);
   });
+  app.closeEventStreams();
   server.closeIdleConnections?.();
 }
 

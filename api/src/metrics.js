@@ -24,10 +24,17 @@ export function createMetrics() {
     registers: [registry],
   });
 
+  const sseClients = new client.Gauge({
+    name: "quickpolls_sse_clients",
+    help: "Open live-update (SSE) connections on this replica",
+    registers: [registry],
+  });
+
   function middleware(req, res, next) {
     const end = httpDuration.startTimer();
     res.on("finish", () => {
       const route = req.route ? req.baseUrl + req.route.path : "unmatched";
+      if (route === "/api/events") return; // open for minutes, would wreck the latency histogram
       end({ method: req.method, route, status: res.statusCode });
     });
     next();
@@ -38,5 +45,5 @@ export function createMetrics() {
     res.end(await registry.metrics());
   }
 
-  return { registry, middleware, handler, pollsCreated, votesCast };
+  return { registry, middleware, handler, pollsCreated, votesCast, sseClients };
 }

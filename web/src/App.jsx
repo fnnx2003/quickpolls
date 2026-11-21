@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, environment } from "./api.js";
+import { connectLive } from "./live.js";
 import { cleanOptions, leaders, percent, pollIdFromHash, timeAgo, timeLeft } from "./utils.js";
 
-const REFRESH_MS = 3000;
+const REFRESH_MS = 3000; // polling while live updates are down
+const SAFETY_NET_MS = 30000; // slow polling while live, in case an event was missed
+const BATCH_MS = 250; // coalesce bursts of events (e.g. a load test) into one refetch
 
 const CLOSE_CHOICES = [
   { label: "Never", minutes: null },
@@ -17,6 +20,9 @@ export default function App() {
   const [filters, setFilters] = useState({ search: "", sort: "newest", status: "all" });
   const [stats, setStats] = useState(null);
   const [error, setError] = useState("");
+  const [live, setLive] = useState({ status: "connecting", from: null });
+  // Polls changed in the last batch of live events; PollDetail refetches when its id is in here.
+  const [changes, setChanges] = useState({ ids: [], deleted: [] });
 
   const refreshPolls = useCallback(async () => {
     try {
@@ -29,11 +35,48 @@ export default function App() {
     }
   }, [filters]);
 
+  const isLive = live.status === "live";
   useEffect(() => {
     refreshPolls();
-    const t = setInterval(refreshPolls, REFRESH_MS);
+    const t = setInterval(refreshPolls, isLive ? SAFETY_NET_MS : REFRESH_MS);
     return () => clearInterval(t);
+  }, [refreshPolls, isLive]);
+
+  // The live connection lives for the whole page; it always calls the latest refreshPolls.
+  const refreshRef = useRef(refreshPolls);
+  useEffect(() => {
+    refreshRef.current = refreshPolls;
   }, [refreshPolls]);
+
+  useEffect(() => {
+    let pending = [];
+    let timer = null;
+    const flush = () => {
+      timer = null;
+      const batch = pending;
+      pending = [];
+      setChanges({
+        ids: batch.map((e) => e.pollId),
+        deleted: batch.filter((e) => e.type === "poll.deleted").map((e) => e.pollId),
+      });
+      refreshRef.current();
+    };
+
+    const stop = connectLive({
+      onStatus: (status) => setLive((l) => ({ ...l, status })),
+      onEvent: (event) => {
+        setLive((l) => ({ ...l, from: event.from }));
+        // "hello" arrives on every (re)connect: refetch once to catch anything missed while away.
+        if (event.type === "hello") return refreshRef.current();
+        pending.push(event);
+        timer ??= setTimeout(flush, BATCH_MS);
+      },
+    });
+    return () => {
+      stop();
+      clearTimeout(timer);
+    };
+  }, []);
 
   // Keep the selected poll in the URL (#/poll/12) so links can be shared.
   useEffect(() => {
@@ -52,6 +95,7 @@ export default function App() {
       <header>
         <h1>📊 QuickPolls</h1>
         <span className="badge">{environment}</span>
+        <LiveStatus status={live.status} />
         {stats && (
           <span className="stats muted">
             {stats.polls} polls · {stats.openPolls} open · {stats.votes} votes
@@ -79,6 +123,8 @@ export default function App() {
             <PollDetail
               key={selectedId}
               id={selectedId}
+              isLive={isLive}
+              changes={changes}
               onChange={refreshPolls}
               onDeleted={() => {
                 select(null);
@@ -91,8 +137,22 @@ export default function App() {
         </section>
       </main>
 
-      <BackendInfo />
+      <BackendInfo lastEventFrom={live.from} />
     </div>
+  );
+}
+
+function LiveStatus({ status }) {
+  const text = { live: "Live", connecting: "Reconnecting…", offline: "Polling" };
+  const title = {
+    live: "Live updates on: changes appear instantly",
+    connecting: "Live connection dropped, reconnecting",
+    offline: `Live updates unavailable, refreshing every ${REFRESH_MS / 1000}s`,
+  };
+  return (
+    <span className={`live-status ${status}`} title={title[status]}>
+      <span className="dot" /> {text[status]}
+    </span>
   );
 }
 
@@ -238,27 +298,45 @@ function PollList({ polls, selectedId, onSelect, filtered }) {
   );
 }
 
-function PollDetail({ id, onChange, onDeleted }) {
+function PollDetail({ id, isLive, changes, onChange, onDeleted }) {
   const [poll, setPoll] = useState(null);
   const [picked, setPicked] = useState([]); // multi-choice selection before submitting
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [peek, setPeek] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    const load = () =>
+  const [deleted, setDeleted] = useState(false);
+
+  // PollDetail is keyed by id, so late responses after unmount are simply dropped by React.
+  const load = useCallback(
+    () =>
       api
         .getPoll(id)
-        .then((p) => !cancelled && (setPoll(p), setError("")))
-        .catch((err) => !cancelled && setError(err.message));
+        .then((p) => (setPoll(p), setError("")))
+        .catch((err) => setError(err.message)),
+    [id],
+  );
+
+  useEffect(() => {
     load();
-    const t = setInterval(load, REFRESH_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
-  }, [id]);
+    const t = setInterval(load, isLive ? SAFETY_NET_MS : REFRESH_MS);
+    return () => clearInterval(t);
+  }, [load, isLive]);
+
+  useEffect(() => {
+    if (changes.deleted.includes(id)) setDeleted(true);
+    else if (changes.ids.includes(id)) load();
+  }, [changes, id, load]);
+
+  // Auto-close happens on the server clock with no event: refetch right when it should close.
+  const closesAt = poll?.closed ? null : poll?.closesAt;
+  useEffect(() => {
+    if (!closesAt) return;
+    const ms = new Date(closesAt).getTime() - Date.now() + 500;
+    if (ms > 24 * 60 * 60 * 1000) return; // too far away for setTimeout; polling will get there
+    const t = setTimeout(load, Math.max(ms, 0));
+    return () => clearTimeout(t);
+  }, [closesAt, load]);
 
   async function run(action) {
     try {
@@ -298,6 +376,7 @@ function PollDetail({ id, onChange, onDeleted }) {
     }
   }
 
+  if (deleted) return <div className="empty">This poll was just deleted.</div>;
   if (error && !poll) return <div className="error">{error}</div>;
   if (!poll) return <div className="muted">Loading…</div>;
 
@@ -392,7 +471,8 @@ function PollDetail({ id, onChange, onDeleted }) {
 }
 
 // Polls /api/info so you can see which backend replica answered (watch it change while scaling).
-function BackendInfo() {
+// lastEventFrom is the replica that published the last live event: with Redis it can be any of them.
+function BackendInfo({ lastEventFrom }) {
   const [info, setInfo] = useState(null);
   useEffect(() => {
     const load = () => api.info().then(setInfo).catch(() => setInfo(null));
@@ -406,6 +486,13 @@ function BackendInfo() {
       {info ? (
         <>
           API <b>{info.version}</b> · served by <code>{info.hostname}</code> · up {info.uptimeSeconds}s
+          {info.liveUpdates && <> · live via {info.liveUpdates}</>}
+          {lastEventFrom && (
+            <>
+              {" "}
+              · last event from <code>{lastEventFrom}</code>
+            </>
+          )}
         </>
       ) : (
         "API unreachable"
