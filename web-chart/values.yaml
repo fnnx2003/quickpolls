@@ -1,7 +1,7 @@
 replicaCount: 2
 image:
   repository: fnnnx/quickpolls-web
-  tag: "d2bf22317fc02fa4603a363a9e474f1a625e68df"
+  tag: "a451b63f6c2bf252d6b248778beabd57f6f698e0"
   pullPolicy: IfNotPresent
 containerPort: 80
 service:
