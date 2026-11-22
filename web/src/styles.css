@@ -152,3 +152,39 @@ footer {
   padding: 8px; background: var(--card); border-top: 1px solid var(--border);
 }
 code { font-size: 0.85em; }
+
+header nav { display: flex; gap: 4px; }
+header nav a {
+  color: var(--muted); text-decoration: none; padding: 6px 10px; border-radius: 8px; font-size: 0.9rem;
+}
+header nav a:hover { color: var(--text); }
+header nav a.active { background: var(--accent-soft); color: var(--accent); }
+
+/* ---- Cluster view ---- */
+.notice {
+  background: var(--accent-soft); color: var(--text); border-radius: 8px; padding: 10px 12px; margin-bottom: 16px;
+  font-size: 0.9rem;
+}
+.cluster-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 16px; }
+.tag.rolling { background: #fff1cc; color: #8a6100; margin-left: 0; }
+.replicas { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+.replica { display: flex; flex-direction: column; gap: 10px; transition: opacity 0.3s; }
+.replica.gone { opacity: 0.45; }
+.replica.not-responding, .replica.db-down { border-color: var(--danger); }
+.replica.shutting-down { border-color: #e0a100; }
+.replica-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.replica-name { font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.replica-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.replica-tags .tag { margin-left: 0; }
+.health-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+.health-dot.ready { background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+.health-dot.shutting-down { background: #e0a100; }
+.health-dot.not-responding, .health-dot.db-down { background: var(--danger); }
+.tag.health.ready { background: var(--success-soft); color: var(--success); }
+.tag.health.shutting-down { background: #fff1cc; color: #8a6100; }
+.tag.health.not-responding, .tag.health.db-down { background: #fdecec; color: #a12d2d; }
+.tag.health.gone { background: var(--border); color: var(--muted); }
+.tag.new { background: var(--success-soft); color: var(--success); }
+.replica dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 0.85rem; }
+.replica dt { color: var(--muted); }
+.replica dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }

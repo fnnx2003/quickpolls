@@ -101,6 +101,13 @@ test("POST /api/polls/:id/close returns 404 for unknown poll", async () => {
   assert.equal((await fetch(`${base}/api/polls/999/close`, { method: "POST" })).status, 404);
 });
 
+test("GET /api/cluster lists this replica", async () => {
+  const body = await (await fetch(`${base}/api/cluster`)).json();
+  assert.equal(body.mode, "local");
+  assert.equal(body.replicas.length, 1);
+  assert.equal(body.replicas[0].hostname, body.servedBy);
+});
+
 test("chaos endpoints are disabled by default", async () => {
   assert.equal((await fetch(`${base}/api/chaos/crash`, { method: "POST" })).status, 404);
 });

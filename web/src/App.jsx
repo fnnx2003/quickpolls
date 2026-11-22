@@ -1,11 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, environment } from "./api.js";
 import { connectLive } from "./live.js";
-import { cleanOptions, leaders, percent, pollIdFromHash, timeAgo, timeLeft } from "./utils.js";
+import {
+  cleanOptions,
+  formatDuration,
+  leaders,
+  pageFromHash,
+  percent,
+  pollIdFromHash,
+  replicaHealth,
+  shortVersion,
+  timeAgo,
+  timeLeft,
+  versionSummary,
+} from "./utils.js";
 
 const REFRESH_MS = 3000; // polling while live updates are down
 const SAFETY_NET_MS = 30000; // slow polling while live, in case an event was missed
 const BATCH_MS = 250; // coalesce bursts of events (e.g. a load test) into one refetch
+const CLUSTER_REFRESH_MS = 2000;
+const GONE_VISIBLE_MS = 30000; // keep vanished replicas on screen for a while, greyed out
+const NEW_REPLICA_MS = 30000;
 
 const CLOSE_CHOICES = [
   { label: "Never", minutes: null },
@@ -17,10 +32,12 @@ const CLOSE_CHOICES = [
 export default function App() {
   const [polls, setPolls] = useState([]);
   const [selectedId, setSelectedId] = useState(() => pollIdFromHash(window.location.hash));
+  const [page, setPage] = useState(() => pageFromHash(window.location.hash));
   const [filters, setFilters] = useState({ search: "", sort: "newest", status: "all" });
   const [stats, setStats] = useState(null);
   const [error, setError] = useState("");
-  const [live, setLive] = useState({ status: "connecting", from: null });
+  // from = replica that sent the last event; connectedTo = replica holding our SSE connection.
+  const [live, setLive] = useState({ status: "connecting", from: null, connectedTo: null });
   // Polls changed in the last batch of live events; PollDetail refetches when its id is in here.
   const [changes, setChanges] = useState({ ids: [], deleted: [] });
 
@@ -67,7 +84,10 @@ export default function App() {
       onEvent: (event) => {
         setLive((l) => ({ ...l, from: event.from }));
         // "hello" arrives on every (re)connect: refetch once to catch anything missed while away.
-        if (event.type === "hello") return refreshRef.current();
+        if (event.type === "hello") {
+          setLive((l) => ({ ...l, connectedTo: event.from }));
+          return refreshRef.current();
+        }
         pending.push(event);
         timer ??= setTimeout(flush, BATCH_MS);
       },
@@ -80,7 +100,10 @@ export default function App() {
 
   // Keep the selected poll in the URL (#/poll/12) so links can be shared.
   useEffect(() => {
-    const onHash = () => setSelectedId(pollIdFromHash(window.location.hash));
+    const onHash = () => {
+      setSelectedId(pollIdFromHash(window.location.hash));
+      setPage(pageFromHash(window.location.hash));
+    };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
@@ -88,6 +111,7 @@ export default function App() {
   const select = (id) => {
     window.location.hash = id ? `#/poll/${id}` : "";
     setSelectedId(id);
+    setPage("polls");
   };
 
   return (
@@ -101,41 +125,53 @@ export default function App() {
             {stats.polls} polls · {stats.openPolls} open · {stats.votes} votes
           </span>
         )}
+        <nav>
+          <a href={selectedId ? `#/poll/${selectedId}` : "#/"} className={page === "polls" ? "active" : ""}>
+            Polls
+          </a>
+          <a href="#/cluster" className={page === "cluster" ? "active" : ""}>
+            Cluster
+          </a>
+        </nav>
         <ThemeToggle />
       </header>
 
       {error && <div className="error">{error}</div>}
 
-      <main>
-        <section className="sidebar">
-          <CreatePoll
-            onCreated={(poll) => {
-              refreshPolls();
-              select(poll.id);
-            }}
-          />
-          <PollFilters filters={filters} onChange={setFilters} />
-          <PollList polls={polls} selectedId={selectedId} onSelect={select} filtered={!!filters.search} />
-        </section>
-
-        <section className="content">
-          {selectedId ? (
-            <PollDetail
-              key={selectedId}
-              id={selectedId}
-              isLive={isLive}
-              changes={changes}
-              onChange={refreshPolls}
-              onDeleted={() => {
-                select(null);
+      {page === "cluster" ? (
+        <ClusterView connectedTo={live.connectedTo} />
+      ) : (
+        <main>
+          <section className="sidebar">
+            <CreatePoll
+              onCreated={(poll) => {
                 refreshPolls();
+                select(poll.id);
               }}
             />
-          ) : (
-            <div className="empty">Pick a poll or create a new one.</div>
-          )}
-        </section>
-      </main>
+            <PollFilters filters={filters} onChange={setFilters} />
+            <PollList polls={polls} selectedId={selectedId} onSelect={select} filtered={!!filters.search} />
+          </section>
+
+          <section className="content">
+            {selectedId ? (
+              <PollDetail
+                key={selectedId}
+                id={selectedId}
+                isLive={isLive}
+                changes={changes}
+                onChange={refreshPolls}
+                onDeleted={() => {
+                  select(null);
+                  refreshPolls();
+                }}
+              />
+            ) : (
+              <div className="empty">Pick a poll or create a new one.</div>
+            )}
+          </section>
+        </main>
+      )}
 
       <BackendInfo lastEventFrom={live.from} />
     </div>
@@ -466,6 +502,125 @@ function PollDetail({ id, isLive, changes, onChange, onDeleted }) {
         </div>
       </div>
       {error && <div className="error small">{error}</div>}
+    </div>
+  );
+}
+
+// Every API replica that is alive right now, refreshed every 2s. Run kubectl scale / rollout restart /
+// delete pod and watch replicas appear, drain and disappear. Needs Redis to see beyond one replica.
+function ClusterView({ connectedTo }) {
+  const [data, setData] = useState(null);
+  const [gone, setGone] = useState([]); // replicas that vanished recently, with goneAt
+  const [error, setError] = useState("");
+  const previous = useRef([]);
+
+  useEffect(() => {
+    const load = () =>
+      api
+        .cluster()
+        .then((d) => {
+          // Only Redis mode gives the full list; in local mode each request may hit a different replica.
+          const tracked = d.mode === "redis" ? d.replicas : [];
+          const alive = new Set(tracked.map((r) => r.hostname));
+          const t = Date.now();
+          const vanished = previous.current.filter((r) => !alive.has(r.hostname)).map((r) => ({ ...r, goneAt: t }));
+          previous.current = tracked;
+          setGone((g) => [...vanished, ...g.filter((r) => !alive.has(r.hostname) && t - r.goneAt < GONE_VISIBLE_MS)]);
+          setData(d);
+          setError("");
+        })
+        .catch((err) => setError(err.message));
+    load();
+    const t = setInterval(load, CLUSTER_REFRESH_MS);
+    return () => clearInterval(t);
+  }, []);
+
+  if (error && !data) return <div className="error">{error}</div>;
+  if (!data) return <div className="muted">Loading…</div>;
+
+  const now = new Date(data.now).getTime();
+  const versions = versionSummary(data.replicas);
+
+  return (
+    <div className="cluster">
+      {data.mode !== "redis" && (
+        <div className="notice">
+          {data.mode === "local"
+            ? "Redis isn't configured (REDIS_URL), so you only see the replica that answered this request. Refresh a few times and watch it change."
+            : "Redis is unreachable, so you only see the replica that answered this request."}
+        </div>
+      )}
+
+      <div className="cluster-summary">
+        <span>
+          <b>{data.replicas.length}</b> {data.replicas.length === 1 ? "replica" : "replicas"}
+        </span>
+        <span className="muted">
+          {versions.map((v) => `${v.count} × ${shortVersion(v.version)}`).join(" · ")}
+        </span>
+        {versions.length > 1 && <span className="tag rolling">rolling update in progress</span>}
+      </div>
+
+      <div className="replicas">
+        {data.replicas.map((r) => (
+          <ReplicaCard
+            key={r.hostname}
+            replica={r}
+            now={now}
+            servedBy={r.hostname === data.servedBy}
+            connected={r.hostname === connectedTo}
+          />
+        ))}
+        {gone.map((r) => (
+          <ReplicaCard key={`gone-${r.hostname}`} replica={r} now={now} goneSeconds={(Date.now() - r.goneAt) / 1000} />
+        ))}
+      </div>
+      {error && <div className="error small">{error}</div>}
+    </div>
+  );
+}
+
+const HEALTH_LABEL = {
+  ready: "ready",
+  "shutting-down": "shutting down",
+  "db-down": "database unreachable",
+  "not-responding": "not responding",
+};
+
+function ReplicaCard({ replica: r, now, servedBy, connected, goneSeconds }) {
+  const health = goneSeconds === undefined ? replicaHealth(r, now) : "gone";
+  const uptime = now - new Date(r.startedAt).getTime();
+  const lastSeen = Math.max(0, Math.round((now - new Date(r.lastSeen).getTime()) / 1000));
+  return (
+    <div className={`card replica ${health}`}>
+      <div className="replica-head">
+        <span className={`health-dot ${health}`} />
+        <code className="replica-name">{r.hostname}</code>
+      </div>
+      <div className="replica-tags">
+        <span className={`tag health ${health}`}>
+          {health === "gone" ? `gone · ${Math.round(goneSeconds)}s ago` : HEALTH_LABEL[health]}
+        </span>
+        {health !== "gone" && uptime < NEW_REPLICA_MS && <span className="tag new">new</span>}
+        {servedBy && <span className="tag">answered this request</span>}
+        {connected && <span className="tag">your live connection</span>}
+      </div>
+      <dl>
+        <dt>Version</dt>
+        <dd>
+          <code>{shortVersion(r.version)}</code>
+        </dd>
+        <dt>Uptime</dt>
+        <dd>{formatDuration(uptime)}</dd>
+        <dt>Live connections</dt>
+        <dd>{r.liveConnections}</dd>
+        <dt>CPU</dt>
+        <dd>{r.cpuPercent}%</dd>
+        <dt>Memory</dt>
+        <dd>{r.memoryMb} MB</dd>
+        <dt>Last heartbeat</dt>
+        <dd>{lastSeen}s ago</dd>
+      </dl>
     </div>
   );
 }
