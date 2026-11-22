@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createEventBus } from "../src/events.js";
+import { createRedis } from "../src/redis.js";
 
 test("local bus delivers events to subscribers until they unsubscribe", async () => {
   const bus = createEventBus();
@@ -19,7 +20,8 @@ test("local bus delivers events to subscribers until they unsubscribe", async ()
 });
 
 test("redis bus falls back to local delivery while redis is unreachable", async () => {
-  const bus = createEventBus({ redisUrl: "redis://127.0.0.1:1" });
+  const redis = createRedis("redis://127.0.0.1:1");
+  const bus = createEventBus({ redis });
   assert.equal(bus.mode, "redis");
   const received = [];
   bus.subscribe((e) => received.push(e));
@@ -28,5 +30,5 @@ test("redis bus falls back to local delivery while redis is unreachable", async 
 
   assert.equal(bus.redisReady(), false);
   assert.deepEqual(received.map((e) => e.pollId), [3]);
-  await bus.close();
+  await redis.close();
 });

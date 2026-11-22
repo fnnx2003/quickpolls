@@ -3,13 +3,20 @@ import os from "node:os";
 import { validatePollInput, parseId, parseOptionIds, parseVoterId } from "./validation.js";
 import { log } from "./logger.js";
 import { createEventBus } from "./events.js";
+import { createCluster } from "./cluster.js";
 
 const startedAt = Date.now();
 
 const KEEPALIVE_MS = 15000;
 
 // Dependencies are injected so tests can pass fakes instead of a real database.
-export function createApp({ pool, config, metrics, events = createEventBus() }) {
+export function createApp({
+  pool,
+  config,
+  metrics,
+  events = createEventBus(),
+  cluster = createCluster({ pool, config, events }),
+}) {
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "16kb" }));
@@ -69,6 +76,12 @@ export function createApp({ pool, config, metrics, events = createEventBus() }) 
       node: process.version,
       liveUpdates: events.mode === "redis" && events.redisReady() ? "redis" : "local",
     });
+  });
+
+  // Every replica that is currently alive (needs Redis to see beyond this one): see cluster.js.
+  app.get("/api/cluster", async (req, res) => {
+    // `now` lets the browser compute ages against the server clock, not its own (they can differ).
+    res.json({ servedBy: os.hostname(), now: new Date().toISOString(), ...(await cluster.list()) });
   });
 
   // ---- Live updates (Server-Sent Events) ---------------------------------------

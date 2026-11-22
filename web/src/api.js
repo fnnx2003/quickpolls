@@ -31,6 +31,7 @@ async function request(path, options = {}) {
 export const api = {
   info: () => request("/api/info"),
   stats: () => request("/api/stats"),
+  cluster: () => request("/api/cluster"),
   listPolls: ({ search = "", sort = "newest", status = "all" } = {}) =>
     request(`/api/polls?${new URLSearchParams({ search, sort, status })}`),
   getPoll: (id) => request(`/api/polls/${id}`),

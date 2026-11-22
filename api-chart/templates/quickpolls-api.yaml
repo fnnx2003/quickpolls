@@ -17,7 +17,7 @@ spec:
       containers:
         - name: api
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.PullPolicy }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - containerPort: {{ .Values.containerPort }}
           env:
@@ -30,6 +30,8 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.dbSecret.name }}
                   key: {{ .Values.dbSecret.key }}
+            - name: APP_VERSION
+              value: {{ .Values.image.tag | quote }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           readinessProbe:

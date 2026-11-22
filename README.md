@@ -86,6 +86,7 @@ window.__APP_CONFIG__ = { apiBaseUrl: "", environment: "local" };
 | GET | `/readyz` | **Readiness**: 200 only if PostgreSQL is reachable, otherwise 503 |
 | GET | `/metrics` | Prometheus metrics (HTTP latency histogram, votes, polls, Node.js runtime) |
 | GET | `/api/info` | Version, **hostname** (= pod name in k8s), uptime, `liveUpdates` (`redis`/`local`) |
+| GET | `/api/cluster` | Every API replica alive right now: version, uptime, live connections, CPU, memory, DB status (needs Redis to see beyond one replica) |
 | GET | `/api/events` | Live updates as **Server-Sent Events** (a long-lived `text/event-stream` response) |
 | GET | `/api/stats` | Totals: `{ polls, openPolls, votes }` |
 | GET | `/api/polls` | List polls. Query: `search`, `sort` (`newest`/`oldest`/`popular`), `status` (`all`/`open`/`closed`) |
@@ -106,6 +107,17 @@ The web app keeps `GET /api/events` open. Whenever a poll is created, voted on, 
 - Redis is optional: if it's down, the API keeps working (`/readyz` reports it but stays ready) and events fall back to the local replica.
 - On `SIGTERM` the API closes open streams so shutdown isn't blocked; browsers reconnect to another replica.
 - Metric: `quickpolls_sse_clients` = open live connections on this replica.
+
+### Cluster view
+
+The **Cluster** tab in the web app (`#/cluster`) shows every API replica that's alive, refreshed every 2s. Each replica writes a heartbeat to Redis every 5s (`quickpolls:replica:<hostname>`, expires after 15s) with its version, uptime, open live connections, CPU (% of one core), memory and whether it can reach Postgres. Things to try while watching it:
+
+- `kubectl scale deployment/quickpolls-api --replicas=5`: new replicas appear, tagged "new".
+- `kubectl rollout restart deployment/quickpolls-api`, or merge a new version: old replicas show "shutting down" and vanish (greyed out for 30s), new ones appear; two versions at once = "rolling update in progress".
+- `kubectl delete pod <api-pod>`: graceful shutdown. `/api/chaos/crash` or an OOMKill: no goodbye, so the card goes red ("not responding") until its record expires.
+- Stop the database: replicas stay alive but show "database unreachable" (and `/readyz` fails).
+
+Without Redis, the page only knows about the replica that answered the request.
 
 The schema upgrades itself on startup (or `npm run migrate`): new columns/tables use `IF NOT EXISTS`, so existing databases keep their data.
 

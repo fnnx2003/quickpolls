@@ -47,18 +47,24 @@ When changing app code, stay compatible with the existing infra:
 - `web/src/App.jsx`: all components. `api.js`: fetch client + per-browser voter id. `utils.js`: pure helpers (unit-tested in `utils.test.js`). `styles.css`: CSS variables, light/dark via `html[data-theme]`.
 - Keep the existing style: small modules, short comments explaining *why*, plain React hooks, no new UI libraries without asking.
 
-## Features already built (merged to `main`, PR #1)
+## Features already built
 
+Merged to `main`:
 - Poll settings: multiple choice (`allowMultiple`), auto-close (`closesInMinutes`), manual close (`POST /api/polls/:id/close`).
 - One vote per browser: `X-Voter-Id` header + `poll_votes` table, `409` on repeat votes. No header means anonymous, unlimited votes (useful for load tests).
 - Results hidden until you vote (with a "Peek" button); winner 🏆 on closed polls.
 - List search/sort/status filters; `GET /api/stats` totals in the header.
 - Shareable hash links `#/poll/:id`, a Share button, and a light/dark/system theme toggle.
+- Live updates: SSE stream `GET /api/events`, event bus in `api/src/events.js`, `web/src/live.js` with fallback to polling. Redis (`redis-chart`, StatefulSet + PVC, Argo app `quickpolls-redis`) is deployed and the API uses `REDIS_URL: redis://quickpolls-redis:6379`.
+
+On branch `cluster-view` (not merged yet):
+- Cluster view: `GET /api/cluster` + a "Cluster" tab (`#/cluster`). Each replica heartbeats to Redis (`api/src/cluster.js`); the shared Redis connection lives in `api/src/redis.js`.
 
 ## Roadmap (agreed order; each is its own branch)
 
-1. **Live updates** (app code done on branch `live-updates`): one SSE stream `GET /api/events` (`api/src/events.js` = event bus, local or Redis pub/sub via optional `REDIS_URL`), `web/src/live.js` with fallback to polling. Keep-alive every 15s. User's infra: Redis on compose/k8s, a Helm chart, an Argo CD app, `REDIS_URL` on the API, nginx timeouts for long-lived connections. Demo first without Redis on 2+ replicas to see the bug.
-2. **Rate limiting** in Redis. User's infra: HPA, NetworkPolicy.
+1. ✅ **Live updates** (done and deployed): one SSE stream `GET /api/events` (`api/src/events.js` = event bus, local or Redis pub/sub via optional `REDIS_URL`), `web/src/live.js` with fallback to polling. Keep-alive every 15s. User's infra: Redis on compose/k8s, a Helm chart, an Argo CD app, `REDIS_URL` on the API, nginx timeouts for long-lived connections. Demo first without Redis on 2+ replicas to see the bug.
+1b. 🚧 **Cluster view** (branch `cluster-view`). User's infra ideas: set `APP_VERSION` from the image tag in the api-chart, scale/rollout/delete-pod drills, HPA later.
+2. **Rate limiting** in Redis. Note: the API sees the nginx Pod's IP, so nginx must pass `X-Forwarded-For` and the API must trust it. User's infra: HPA, NetworkPolicy.
 3. **User accounts** (JWT; only the creator can close/delete). User's infra: Secret handling, Sealed Secrets / External Secrets.
 4. **Scheduled jobs** (daily poll, deleting old polls). User's infra: CronJob.
 5. **Worker + queue** (export, webhook/email on close). User's infra: a worker Deployment.
