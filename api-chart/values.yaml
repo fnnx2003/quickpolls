@@ -26,3 +26,8 @@ resources:
 probe:
   readiness: /readyz
   liveness: /healthz
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPU: 60
